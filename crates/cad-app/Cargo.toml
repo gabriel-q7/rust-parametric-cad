@@ -1,0 +1,15 @@
+[package]
+name = "cad-app"
+description = "Bevy desktop editor for the parametric CAD document model."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+default-run = "cad-app"
+
+[dependencies]
+cad-core.workspace = true
+bevy.workspace = true
+
+[lints]
+workspace = true
