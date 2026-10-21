@@ -88,7 +88,7 @@ fn spawn_fields(panel: &mut ChildSpawnerCommands, feature: &Feature, unit: &str)
     };
     let id = feature.id().to_string();
     panel.spawn(label(
-        format!("{}  ·  id {}", feature.geometry().kind(), &id[..8]),
+        format!("{}  |  id {}", feature.geometry().kind(), &id[..8]),
         12.0,
         TEXT_DIM,
     ));
@@ -276,7 +276,7 @@ fn parse_number(text: &str) -> Result<f64, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cad_core::{BoxParameters, Geometry, PrimitiveKind};
+    use cad_core::{BoxParameters, Geometry};
 
     fn feature() -> Feature {
         Feature::new(
@@ -341,6 +341,5 @@ mod tests {
         let err = build_update(&f, [width("-3")]).unwrap_err();
         assert!(err.contains("greater than 0"), "{err}");
         assert!(build_update(&f, [width("inf")]).is_err());
-        let _ = PrimitiveKind::Box;
     }
 }

@@ -44,27 +44,29 @@ fn spawn_lights(mut commands: Commands) {
     ));
 }
 
-/// Grid spacing in meters: 10 mm minor cells, 100 mm major cells, 2 m wide.
+/// Grid spacing in meters: 10 mm minor cells near the origin, 100 mm major
+/// cells over a wider area.
 const MINOR_CELL: f32 = 0.01;
+const MINOR_EXTENT: f32 = 0.6;
 const MAJOR_CELL: f32 = 0.1;
-const GRID_EXTENT: f32 = 2.0;
+const MAJOR_EXTENT: f32 = 3.0;
 const AXIS_LENGTH: f32 = 0.25;
 
 fn draw_grid_and_axes(mut gizmos: Gizmos) {
     // Gizmo grids are drawn in their local XY plane; rotate it onto Bevy's XZ.
     let ground = Isometry3d::from_rotation(Quat::from_rotation_x(FRAC_PI_2));
-    let cells = |size: f32| UVec2::splat((GRID_EXTENT / size).round() as u32);
+    let cells = |extent: f32, size: f32| UVec2::splat((extent / size).round() as u32);
     gizmos.grid(
         ground,
-        cells(MINOR_CELL),
+        cells(MINOR_EXTENT, MINOR_CELL),
         Vec2::splat(MINOR_CELL),
-        Color::srgba(1.0, 1.0, 1.0, 0.035),
+        Color::srgba(1.0, 1.0, 1.0, 0.04),
     );
     gizmos.grid(
         ground,
-        cells(MAJOR_CELL),
+        cells(MAJOR_EXTENT, MAJOR_CELL),
         Vec2::splat(MAJOR_CELL),
-        Color::srgba(1.0, 1.0, 1.0, 0.12),
+        Color::srgba(1.0, 1.0, 1.0, 0.14),
     );
     for (axis, color) in [
         ([1.0, 0.0, 0.0], css::RED),

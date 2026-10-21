@@ -3,8 +3,9 @@
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
 
-use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
 use super::PointerOverUi;
 use crate::editor::EditorSystems;
@@ -110,22 +111,34 @@ enum Drag {
     Pan,
 }
 
+/// Drag deltas come from the cursor position rather than raw device motion,
+/// so panning tracks the cursor exactly regardless of mouse acceleration.
+#[allow(clippy::too_many_arguments)]
 fn orbit_camera_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     over_ui: PointerOverUi,
-    windows: Query<&Window>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut drag: Local<Drag>,
+    mut last_cursor: Local<Option<Vec2>>,
     mut cameras: Query<(&mut OrbitCamera, &mut Transform, &Projection)>,
 ) {
     let Ok((mut orbit, mut transform, projection)) = cameras.single_mut() else {
         return;
     };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let cursor = window.cursor_position();
+    let delta = match (cursor, *last_cursor) {
+        (Some(now), Some(before)) => now - before,
+        _ => Vec2::ZERO,
+    };
+    *last_cursor = cursor;
+
     let pointer_over_ui = over_ui.get();
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-
     if !pointer_over_ui {
         if mouse.just_pressed(MouseButton::Middle)
             || (mouse.just_pressed(MouseButton::Right) && shift)
@@ -141,14 +154,13 @@ fn orbit_camera_input(
 
     let mut next = *orbit;
     match *drag {
-        Drag::Orbit => next.orbit(motion.delta),
+        Drag::Orbit => next.orbit(delta),
         Drag::Pan => {
             let fov = match projection {
                 Projection::Perspective(p) => p.fov,
                 _ => FRAC_PI_4,
             };
-            let height = windows.iter().next().map_or(800.0, Window::height);
-            next.pan(motion.delta, &transform, fov, height);
+            next.pan(delta, &transform, fov, window.height());
         }
         Drag::None => {}
     }

@@ -179,3 +179,9 @@ fn errors_have_readable_messages() {
         "unsupported schema version 2 (this build supports version 1)"
     );
 }
+
+#[test]
+fn bundled_example_project_is_valid() {
+    let doc = from_json(include_str!("../../../examples/demo.cad.json")).unwrap();
+    assert_eq!(doc.len(), 4);
+}

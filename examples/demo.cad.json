@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "units": "mm",
+  "features": [
+    {
+      "id": "0b6f6c1e-3f5a-4c0e-9a51-2f1d7c9e4a10",
+      "name": "Base plate",
+      "geometry": { "type": "box", "width": 300.0, "depth": 200.0, "height": 12.0 },
+      "transform": { "translation": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0] }
+    },
+    {
+      "id": "6a2b9d47-81c3-4f2e-b6d8-5e0f3a7c1b22",
+      "name": "Post",
+      "geometry": { "type": "cylinder", "radius": 15.0, "height": 160.0 },
+      "transform": { "translation": [-100.0, 0.0, 12.0], "rotation_deg": [0.0, 0.0, 0.0] }
+    },
+    {
+      "id": "c4e8f0a1-7d2b-4b6a-9c3e-8f1a2d5b7e33",
+      "name": "Arm",
+      "geometry": { "type": "cylinder", "radius": 10.0, "height": 180.0 },
+      "transform": { "translation": [-100.0, 0.0, 150.0], "rotation_deg": [0.0, 90.0, 0.0] }
+    },
+    {
+      "id": "e1f2a3b4-c5d6-4e7f-8091-a2b3c4d5e644",
+      "name": "Knob",
+      "geometry": { "type": "sphere", "radius": 30.0 },
+      "transform": { "translation": [80.0, 0.0, 120.0], "rotation_deg": [0.0, 0.0, 0.0] }
+    }
+  ]
+}

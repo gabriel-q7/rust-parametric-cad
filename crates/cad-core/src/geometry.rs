@@ -346,8 +346,8 @@ mod tests {
         assert_eq!(mesh.positions.len(), mesh.normals.len());
         assert_eq!(mesh.indices.len() % 3, 0);
         assert!(mesh.triangle_count() > 0);
-        for tri in mesh.indices.chunks_exact(3) {
-            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.positions[i as usize]);
+        for tri in mesh.indices.as_chunks::<3>().0 {
+            let [a, b, c] = tri.map(|i| mesh.positions[i as usize]);
             let face = cross(sub(b, a), sub(c, a));
             assert!(dot(face, face) > 0.0, "degenerate triangle {tri:?}");
             let n = tri.iter().fold([0.0; 3], |acc, &i| {

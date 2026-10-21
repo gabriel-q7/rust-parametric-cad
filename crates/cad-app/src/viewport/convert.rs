@@ -47,6 +47,7 @@ pub fn transform_from_cad(transform: &Transform3D, unit: LengthUnit) -> Transfor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::camera::primitives::MeshAabb;
     use cad_core::{BoxParameters, Geometry, Tessellation};
     use std::f32::consts::FRAC_PI_2;
 

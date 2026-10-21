@@ -93,13 +93,19 @@ pub fn format_number(value: f64) -> String {
     format!("{value}")
 }
 
+type ButtonVisualsQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        &'static ButtonColor,
+        &'static mut BackgroundColor,
+    ),
+    Or<(Changed<Interaction>, Changed<ButtonColor>)>,
+>;
+
 /// Hover/press feedback for every button.
-pub fn button_visuals(
-    mut buttons: Query<
-        (&Interaction, &ButtonColor, &mut BackgroundColor),
-        Or<(Changed<Interaction>, Changed<ButtonColor>)>,
-    >,
-) {
+pub fn button_visuals(mut buttons: ButtonVisualsQuery) {
     for (interaction, base, mut background) in &mut buttons {
         background.0 = match interaction {
             Interaction::Pressed => base.0.lighter(0.15),

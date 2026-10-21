@@ -193,13 +193,156 @@ fn select_on_click(
     windows: Query<(), With<PrimaryWindow>>,
     mut selection: ResMut<Selection>,
 ) {
-    if click.button != PointerButton::Primary {
+    // Pointer events bubble up the hierarchy and finally to the window, so
+    // only react to the first trigger and look at what was actually hit.
+    let target = click.original_event_target();
+    if click.button != PointerButton::Primary || click.event_target() != target {
         return;
     }
-    let target = click.event_target();
     if let Ok(object) = objects.get(target) {
         selection.select(object.id);
     } else if windows.contains(target) {
         selection.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Headless checks of the document -> entity pipeline (no window or GPU).
+
+    use bevy::asset::AssetPlugin;
+    use cad_core::{Command, PrimitiveKind, SphereParameters, Transform3D};
+
+    use super::*;
+    use crate::commands::{CommandsPlugin, EditCommand, ProjectCommand};
+    use crate::editor::EditorStatePlugin;
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .add_plugins((EditorStatePlugin, CommandsPlugin, ObjectsPlugin));
+        app.update();
+        app
+    }
+
+    fn send(app: &mut App, command: Command) {
+        app.world_mut().write_message(EditCommand(command));
+        app.update();
+    }
+
+    fn entity_of(app: &App, id: ObjectId) -> Option<Entity> {
+        app.world()
+            .resource::<ObjectEntityMap>()
+            .0
+            .get(&id)
+            .copied()
+    }
+
+    fn mesh_vertex_count(app: &App, entity: Entity) -> usize {
+        let handle = &app.world().get::<Mesh3d>(entity).unwrap().0;
+        app.world()
+            .resource::<Assets<Mesh>>()
+            .get(handle)
+            .unwrap()
+            .count_vertices()
+    }
+
+    #[test]
+    fn create_update_delete_keep_entities_in_sync() {
+        let mut app = app();
+        let create = Command::create(
+            "Ball",
+            PrimitiveKind::Sphere.default_geometry(),
+            Transform3D::default(),
+        );
+        let Command::CreatePrimitive { id, .. } = create else {
+            unreachable!()
+        };
+        send(&mut app, create);
+        let entity = entity_of(&app, id).expect("entity spawned for new object");
+        assert_eq!(app.world().get::<CadObject>(entity).unwrap().id, id);
+        assert!(
+            app.world().resource::<Selection>().is(id),
+            "new object is selected"
+        );
+
+        // Parameter edit: same entity, regenerated mesh.
+        let before = app.world().get::<Mesh3d>(entity).unwrap().0.clone();
+        send(
+            &mut app,
+            Command::UpdateParameters {
+                id,
+                geometry: Geometry::Sphere(SphereParameters::new(5.0).unwrap()),
+            },
+        );
+        assert_eq!(entity_of(&app, id), Some(entity));
+        assert_eq!(app.world().get::<Mesh3d>(entity).unwrap().0, before);
+        let rendered = app.world().get::<RenderedGeometry>(entity).unwrap().0;
+        assert_eq!(
+            rendered,
+            Geometry::Sphere(SphereParameters::new(5.0).unwrap())
+        );
+        assert!(mesh_vertex_count(&app, entity) > 0);
+
+        // Move: transform converted to meters.
+        send(
+            &mut app,
+            Command::SetObjectTransform {
+                id,
+                transform: Transform3D::from_translation([250.0, 0.0, 0.0]),
+            },
+        );
+        let translation = app.world().get::<Transform>(entity).unwrap().translation;
+        assert!(translation.abs_diff_eq(Vec3::new(0.25, 0.0, 0.0), 1e-6));
+
+        send(&mut app, Command::DeleteObject { id });
+        assert_eq!(entity_of(&app, id), None);
+        assert!(app.world().get_entity(entity).is_err(), "entity despawned");
+        assert_eq!(app.world().resource::<Selection>().get(), None);
+    }
+
+    #[test]
+    fn invalid_command_changes_nothing_and_reports_error() {
+        let mut app = app();
+        let create = Command::create(
+            "Box",
+            PrimitiveKind::Box.default_geometry(),
+            Transform3D::default(),
+        );
+        let Command::CreatePrimitive { id, .. } = create else {
+            unreachable!()
+        };
+        send(&mut app, create);
+        let doc_before = app.world().resource::<CadDocument>().0.clone();
+
+        send(
+            &mut app,
+            Command::RenameObject {
+                id,
+                name: "   ".into(),
+            },
+        );
+        assert_eq!(app.world().resource::<CadDocument>().0, doc_before);
+        let status = app.world().resource::<crate::editor::Status>();
+        assert_eq!(status.level, crate::editor::StatusLevel::Error);
+    }
+
+    #[test]
+    fn new_project_clears_all_entities() {
+        let mut app = app();
+        for kind in PrimitiveKind::ALL {
+            send(
+                &mut app,
+                Command::create("X", kind.default_geometry(), Transform3D::default()),
+            );
+        }
+        assert_eq!(app.world().resource::<ObjectEntityMap>().0.len(), 3);
+        app.world_mut().write_message(ProjectCommand::New);
+        app.update();
+        assert!(app.world().resource::<ObjectEntityMap>().0.is_empty());
+        let mut objects = app.world_mut().query::<&CadObject>();
+        assert_eq!(objects.iter(app.world()).count(), 0);
     }
 }
