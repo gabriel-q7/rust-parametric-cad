@@ -88,9 +88,12 @@ pub fn number_field(value: f64, tab_index: i32) -> impl Bundle {
     )
 }
 
-/// Shortest representation that round-trips (`100`, `12.5`, `0.001`).
+/// Compact decimal text (`100`, `12.5`, `0.001`), rounded to 6 decimals so
+/// floating-point noise such as `49.99999999999` displays as `50`.
 pub fn format_number(value: f64) -> String {
-    format!("{value}")
+    let rounded = (value * 1e6).round() / 1e6;
+    // `+ 0.0` turns -0 into 0.
+    format!("{}", rounded + 0.0)
 }
 
 type ButtonVisualsQuery<'w, 's> = Query<

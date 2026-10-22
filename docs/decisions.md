@@ -116,3 +116,76 @@ the next.
 
 **Consequences.** Panning matches the cursor movement exactly. Dragging stops updating while
 the cursor is outside the window.
+
+## D11. Indexed polygon mesh, not half-edge or B-rep
+
+**Context.** Direct editing needs stable vertex, edge, and face identities,
+connectivity for validation, and extrusion. A half-edge structure or a B-rep
+kernel is a large investment.
+
+**Decision.** `EditableMesh` stores explicit vertex, edge, and face records with
+`u32` IDs drawn from one per-mesh counter. Connectivity, meaning which faces
+traverse which edges and in which direction, is derived when needed. The
+invariant is a closed, consistently oriented 2-manifold with no zero-length
+edges and no zero-area faces.
+
+**Consequences.**
+
+- Simple, serializable, and easy to validate.
+- Every operation is O(n) in the mesh size, which is fine for primitive-sized
+  meshes.
+- A half-edge structure can be introduced behind the same API if mesh sizes or
+  operations (loops, bevels) require it.
+
+## D12. One-way conversion with provenance
+
+**Context.** After arbitrary topology edits, the primitive parameters can no
+longer be recovered reliably.
+
+**Decision.** `ConvertToEditable` replaces the parametric geometry with a mesh
+and keeps the original geometry in `source` as read-only provenance. The object's
+ID, name, and transform are unchanged. There is no conversion back.
+
+**Consequences.** The hybrid workflow stays honest: parametric objects stay
+parametric until the user opts in. The inverse command (for a future undo) can
+still restore the primitive exactly.
+
+## D13. Pure mesh operations, generic geometry inverses
+
+**Context.** Topology edits must be atomic and reversible.
+
+**Decision.** Mesh operations return a new, validated mesh and never mutate in
+place. The topology commands use `UpdateParameters { previous geometry }` as
+their inverse.
+
+**Consequences.** Atomicity holds by construction. Inverses are trivially
+correct, at the cost of cloning the mesh for each edit, which is negligible at
+this size.
+
+## D14. X-ray topology overlay and screen-space picking
+
+**Context.** Picking vertices and edges needs tolerance in pixels, and hidden
+elements must remain reachable.
+
+**Decision.**
+
+- A gizmo group with `depth_bias = -1` draws the overlay on top of the scene.
+- Vertices and edges are picked by projecting them to the screen and taking the
+  nearest one within a pixel radius. Depth breaks ties.
+- Faces are picked by a ray cast in the core.
+
+**Consequences.** Works with any camera angle and needs no extra rendering
+pipeline. Picking ignores occlusion, which matches what the overlay shows; Prev
+/ Next remain as a precise fallback.
+
+## D15. Schema version 2, reading 1 and 2
+
+**Context.** Editable meshes add a new geometry type that older builds cannot
+read.
+
+**Decision.** Bump `CURRENT_SCHEMA_VERSION` to 2 and keep
+`MIN_SUPPORTED_SCHEMA_VERSION` at 1. Version 1 is a strict subset of version 2,
+so loading it only marks the document as version 2.
+
+**Consequences.** Existing projects keep working. Saving always writes version 2,
+which older builds reject with a clear "unsupported schema version" error.

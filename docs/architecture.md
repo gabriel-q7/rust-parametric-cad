@@ -27,7 +27,8 @@ rust-parametric-cad/
     │   │   ├── units.rs       LengthUnit, mm <-> m
     │   │   ├── validation.rs  ValidationError and rule functions
     │   │   ├── parameters.rs  BoxParameters, SphereParameters, CylinderParameters
-    │   │   ├── geometry.rs    Geometry, PrimitiveKind, tessellation -> TriMesh
+    │   │   ├── geometry.rs    Geometry, PrimitiveKind, conversion, tessellation -> TriMesh
+    │   │   ├── mesh.rs        EditableMesh: topology, validation, edits, picking
     │   │   ├── feature.rs     ObjectId, Transform3D, Feature
     │   │   ├── document.rs    Document, DocumentError, CURRENT_SCHEMA_VERSION
     │   │   ├── command.rs     Command, Applied (inverse + affected ids)
@@ -40,7 +41,8 @@ rust-parametric-cad/
             ├── plugins.rs     CadEditorPlugins (plugin group)
             ├── editor.rs      CadDocument, Selection, Status; EditorSystems sets
             ├── commands/      applying commands; project file IO
-            ├── viewport/      camera, scene, core->Bevy conversion, entity sync, picking
+            ├── viewport/      camera, scene, core->Bevy conversion, entity sync, picking,
+            │                  topology overlay + vertex/edge/face picking
             └── ui/            layout, toolbar actions, object list, inspector, shortcuts
 ```
 
@@ -97,6 +99,10 @@ pub enum Command {
     SetObjectTransform { id, transform },
     InsertFeature { index, feature },   // inverse of DeleteObject
     Batch(Vec<Command>),                // all or nothing
+    ConvertToEditable { id },           // one-way
+    MoveVertex { id, vertex, position },
+    TranslateEdge { id, edge, offset },
+    ExtrudeFace { id, face, distance },
 }
 ```
 
@@ -109,8 +115,54 @@ pub enum Command {
 - **Result.** `Applied { inverse, affected }`. Applying `inverse` restores the previous
   state exactly, including the position of a deleted feature. `affected` lists the IDs of
   the objects that changed.
+- **Topology commands.** These address elements by stable IDs (`ObjectId` plus
+  `VertexId`, `EdgeId`, or `FaceId`), never by UI indices or entities.
+  - On a parametric object they fail with `NotEditable`.
+  - Their inverse is `UpdateParameters` with the previous geometry.
+  - `Applied::new_face` reports the cap face created by an extrusion.
 - **Caller-chosen IDs.** `CreatePrimitive` carries its ID, so replaying it (for example for a
   redo) recreates the same object. `Command::create` generates a fresh ID for convenience.
+
+### Editable meshes
+
+`Geometry::Mesh(EditableGeometry { mesh, source })` sits next to the parametric
+variants. There is no separate document system for meshes: a converted object
+is still a `Feature` with the same ID, name, and transform.
+
+```
+EditableMesh
+├── vertices: [Vertex { id: VertexId, position: [f64; 3] }]   local mm
+├── edges:    [Edge   { id: EdgeId, vertices: [VertexId; 2] }]
+├── faces:    [Face   { id: FaceId, vertices: Vec<VertexId> }] CCW from outside
+└── next_id:  u32      one counter for all three; IDs are never reused
+```
+
+This is an indexed polygon mesh with explicit topology records, not a half-edge
+or B-rep kernel. Connectivity, meaning which faces use which edges and in which
+direction, is derived when needed. That is enough for validation and extrusion
+at this size; see [D11](decisions.md#d11-indexed-polygon-mesh-not-half-edge-or-b-rep).
+
+**Invariant.** The surface is a closed, consistently oriented 2-manifold:
+
+- every edge is walked once in each direction by the face boundaries;
+- there are no zero-length edges and no zero-area faces.
+
+The full list is in [file-format.md](file-format.md#editable-mesh-type-mesh-version-2).
+
+**Operations.** All of them are pure: they take `&self`, return a new mesh, and
+validate it before returning.
+
+| Operation | Effect |
+| --- | --- |
+| `Geometry::to_editable` | Primitive → mesh: a box is 8/12/6; cylinders and spheres use `Tessellation::EDITABLE` (24 segments, 12 rings) |
+| `with_vertex_moved(v, p)` | Sets one position |
+| `with_edge_translated(e, d)` | Adds `d` to both endpoints (length and direction preserved) |
+| `with_face_extruded(f, d)` | Checks planar + convex. Adds `v_i' = v_i + d·n`, rising edges, rim edges, side quads `[v_i, v_i+1, v'_i+1, v'_i]`, and a cap. Removes `f` and returns the cap ID. |
+| `triangulate` | Flat-shaded fan triangulation for rendering |
+| `pick_face(origin, dir)` | Nearest ray hit (Möller–Trumbore over the fan triangles) |
+
+Unaffected elements keep their IDs and data. New elements always get fresh
+IDs, and removed IDs are never reused.
 
 ### Geometry pipeline
 
@@ -232,6 +284,38 @@ sequenceDiagram
   every object entity is a child of that root. Object transforms therefore stay in CAD terms,
   and the change of frame happens exactly once. CAD (x, y, z) maps to Bevy (x, z, −y).
 
+### Selection model
+
+`Selection` holds three things:
+
+- the selected object;
+- an `EditMode` (`Object`, `Vertex`, `Edge`, or `Face`);
+- an optional `TopologyElement` (a `VertexId`, `EdgeId`, or `FaceId`).
+
+Rules it keeps:
+
+- Selecting a different object resets the mode.
+- Changing the mode drops an element of another kind.
+- After each command, `fix_up_selection` clears an element that no longer exists
+  and resets the mode if the object is not editable.
+- After an extrusion, the new cap face is selected.
+
+### Topology overlay and picking (`viewport/topology.rs`)
+
+- **Overlay.** A dedicated gizmo group with `depth_bias = -1` draws the
+  wireframe on top of the scene (x-ray), plus vertex markers in vertex mode and
+  the selected element in yellow. A face is shown with its outline, a hatch,
+  and a normal arrow. Marker sizes scale with camera distance.
+- **Picking.** On a left click in a topology mode, the click is turned into a
+  pick, and the object-click observer ignores it.
+  - Vertices: nearest projected vertex within 12 px.
+  - Edges: nearest projected segment within 8 px.
+  - Ties within 2 px go to the element nearer the camera.
+  - Faces: the cursor ray is transformed into the object's local millimeter frame
+    and passed to `EditableMesh::pick_face`.
+- **Occlusion.** Vertex and edge picking ignore occlusion, so they match the
+  x-ray overlay.
+
 ### Input handling details
 
 - **Is the pointer over the UI?** `PointerOverUi` checks whether Bevy's picking `HoverMap`
@@ -245,7 +329,8 @@ sequenceDiagram
   from raw mouse motion, so panning tracks the cursor exactly. A drag starts only over the
   viewport but continues over the panels.
 - **Text fields** use Bevy's `EditableText` widget. Keyboard shortcuts check `InputFocus` so
-  that typing in a field does not trigger them.
+  that typing in a field does not trigger them. The inspector clears `InputFocus` when it
+  rebuilds, because the focused field is despawned and Bevy can reuse its entity ID.
 
 ### Persistence boundary
 

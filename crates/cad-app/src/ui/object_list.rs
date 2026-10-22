@@ -13,6 +13,10 @@ use crate::editor::{CadDocument, Selection};
 #[derive(Component)]
 pub struct ObjectList;
 
+/// Marks a panel that scrolls vertically with the mouse wheel.
+#[derive(Component)]
+pub struct WheelScroll;
+
 pub fn rebuild_object_list(
     mut changes: MessageReader<DocumentChanged>,
     selection: Res<Selection>,
@@ -58,7 +62,7 @@ fn object_row(feature: &Feature, selected: bool) -> impl Bundle {
         children![
             (Text::new(feature.name()), font(14.0), TextColor(TEXT)),
             (
-                Text::new(feature.geometry().kind().label()),
+                Text::new(feature.geometry().label()),
                 font(12.0),
                 TextColor(TEXT_DIM)
             ),
@@ -66,9 +70,9 @@ fn object_row(feature: &Feature, selected: bool) -> impl Bundle {
     )
 }
 
-pub fn scroll_object_list(
+pub fn scroll_panels(
     scroll: Res<AccumulatedMouseScroll>,
-    mut lists: Query<(&RelativeCursorPosition, &mut ScrollPosition), With<ObjectList>>,
+    mut lists: Query<(&RelativeCursorPosition, &mut ScrollPosition), With<WheelScroll>>,
 ) {
     if scroll.delta.y == 0.0 {
         return;

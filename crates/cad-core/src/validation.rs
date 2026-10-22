@@ -33,6 +33,10 @@ pub enum ValidationError {
     NameTooLong,
     #[error("duplicate object id {0}")]
     DuplicateId(ObjectId),
+    #[error("{0}")]
+    Mesh(Box<crate::mesh::MeshError>),
+    #[error("mesh provenance must be a parametric primitive")]
+    InvalidSource,
     #[error("object {id}: {source}")]
     InFeature {
         id: ObjectId,

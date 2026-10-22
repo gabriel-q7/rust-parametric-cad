@@ -35,11 +35,15 @@ manual `cargo run` smoke test.
 | --- | --- |
 | `crates/cad-core/src/**` (`#[cfg(test)]`) | units, validation, parameter constructors, tessellation (bounds and outward winding), naming |
 | `crates/cad-core/tests/document_operations.rs` | the command API: create, update, rename, delete, batch atomicity, inverses, duplicate IDs |
+| `crates/cad-core/tests/mesh_editing.rs` | conversion, vertex move, edge translate, extrusion (counts, connectivity, ±distance, invalid input, atomicity, inverses), mesh persistence and corrupted files |
+| `crates/cad-core/src/mesh.rs` | mesh invariants, degenerate edits, face picking, triangulation |
 | `crates/cad-core/tests/persistence.rs` | JSON round trips, field layout, malformed and unsupported files, validation on load, the example file |
 | `crates/cad-app/src/commands/project.rs` | saving to and loading from real temporary files |
 | `crates/cad-app/src/viewport/convert.rs` | mm → m, Z-up → Y-up, Euler order |
-| `crates/cad-app/src/viewport/objects.rs` | **headless ECS** tests of the document → entity sync |
-| `crates/cad-app/src/ui/inspector.rs` | parsing inspector fields into one batch command, error messages |
+| `crates/cad-app/src/viewport/objects.rs` | **headless ECS** tests of the document → entity sync, including convert and extrude (same entity, cap selected) |
+| `crates/cad-app/src/viewport/topology.rs` | screen-space pick helpers, local frame round trip |
+| `crates/cad-app/src/editor.rs` | selection, mode, and element consistency |
+| `crates/cad-app/src/ui/inspector.rs` | parsing property and topology fields into commands, error messages |
 | `crates/cad-app/src/viewport/camera.rs` | orbit math and clamping |
 
 ### Headless app tests
@@ -97,6 +101,25 @@ updating.
    a message.
 5. Send it from the UI with `EditCommand(Command::YourCommand { .. })`. Do not mutate
    `CadDocument` directly.
+
+### Add a mesh operation (example: scale a face)
+
+1. Write a pure method on `EditableMesh` in `mesh.rs` that takes `&self` and
+   returns `Result<EditableMesh, MeshError>`:
+   - clone the mesh;
+   - change the clone;
+   - allocate new element IDs only with `take_id`;
+   - end with `mesh.validate()?`.
+2. Add a `Command` variant and implement it with the `edit_mesh` helper in
+   `command.rs`. That gives you `NotEditable` handling, provenance preservation,
+   and the inverse for free.
+3. Add tests to `tests/mesh_editing.rs`:
+   - the expected counts;
+   - that untouched IDs are unchanged;
+   - rejected input leaves the document unchanged (`assert_rejected`);
+   - applying the inverse restores the original.
+4. In the app, add an inspector field and handle it in
+   `inspector::build_topology_command`. Add a status verb in `commands/mod.rs`.
 
 ### Add a toolbar button or keyboard shortcut
 

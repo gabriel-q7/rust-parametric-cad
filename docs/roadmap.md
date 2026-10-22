@@ -6,7 +6,14 @@
 | --- | --- | --- |
 | Editing | No undo/redo | Inverse commands already exist; only a history stack and keybindings are missing. |
 | Editing | Single selection | `Selection` holds one `ObjectId`. |
-| Editing | No transform gizmo | Position and rotation can only be typed into fields. |
+| Editing | No transform gizmo | Position, rotation, vertices, and edge offsets are typed into fields. Bevy 0.19.1 ships `TransformGizmoPlugin` (see below). |
+| Mesh editing | Conversion is one-way | By design ([D12](decisions.md#d12-one-way-conversion-with-provenance)); the inverse command could restore the primitive once undo exists. |
+| Mesh editing | Only vertex move, edge translate, and face extrusion | No subdivision, bevel, collapse, loops, merge, or delete. |
+| Mesh editing | Extrusion needs a planar, convex face and always uses the face normal | Faces made non-planar by vertex moves cannot be extruded. |
+| Mesh editing | Self-intersection is not detected | For example, extruding a whole face inwards past the opposite side, or a vertex pushed through the solid. Topology stays valid; the geometry may overlap. |
+| Mesh editing | Non-planar or concave faces render with fan triangulation | It can look wrong for strongly concave faces after vertex edits. |
+| Mesh editing | Vertex and edge picking ignore occlusion (x-ray) | Hidden elements can be picked. Use Prev / Next or orbit. |
+| Mesh editing | No multi-selection of elements | One vertex, edge, or face at a time. |
 | Editing | No live preview | Changes are applied with Enter or Apply ([D9](decisions.md#d9-explicit-apply-instead-of-live-editing)). |
 | Files | No native file dialog | The path is typed into the toolbar ([D8](decisions.md#d8-file-path-in-the-toolbar-instead-of-a-native-file-dialog)). |
 | Files | No unsaved-changes prompt | New and Open replace the document immediately. |
@@ -20,6 +27,16 @@
 
 Listed roughly by value relative to effort:
 
+0. **Interactive gizmo for objects, vertices, and edges.** Bevy 0.19.1 ships
+   `bevy::gizmos::transform_gizmo::{TransformGizmoPlugin, TransformGizmoFocus,
+   TransformGizmoState}`, with translate, rotate, and scale handles plus snapping.
+   - For objects: focus it on the object entity, and send a
+     `SetObjectTransform` command when the drag ends.
+   - For a vertex or edge: focus it on a proxy entity at the element, and turn the
+     drag delta into `MoveVertex` or `TranslateEdge`.
+   - While `TransformGizmoState` is active, block orbit and picking.
+
+   This needs no new dependency.
 1. **Undo/redo.** Push `Applied::inverse` onto an undo stack in `apply_edit_commands`. When
    undoing, apply the inverse and push *its* inverse onto a redo stack. Clear both stacks on
    New and Open. Bind Ctrl+Z and Ctrl+Shift+Z.
@@ -33,6 +50,20 @@ Listed roughly by value relative to effort:
    (`TriMesh::bounds`).
 6. **More primitives**: cone, torus, wedge. See "Add a new primitive" in
    [development.md](development.md).
+
+## Ecosystem crates (researched 2026-10-21, against Bevy 0.19.1)
+
+| Option | Works with 0.19.1? | Use for |
+| --- | --- | --- |
+| Built-in `TransformGizmoPlugin` (`bevy_gizmos`) | yes, already compiled | Object, vertex, and edge drag handles (step 0 above) |
+| Built-in `InfiniteGridPlugin` (`bevy_dev_tools` feature) | yes | Replacing the hand-drawn gizmo grid |
+| `bevy_mod_outline` 0.13 | yes | Selection and hover outlines instead of a material swap |
+| `bevy_editor_cam` 0.10 / `bevy_panorbit_camera` 0.35 | yes | Replacing the hand-written orbit camera if it becomes a burden; `bevy_editor_cam` targets CAD and editors |
+| `transform-gizmo-bevy` 0.11 | yes | Only if the built-in gizmo is too limited (adds the `epaint` and `emath` crates from egui) |
+| `bevy_egui` 0.42 + `bevy-inspector-egui` 0.37 | yes | A debug inspector behind a feature flag. Not for the main UI: it would be a second UI stack. |
+| `bevy_transform_gizmo` (fslabs) | **no**: last release targets Bevy 0.14 with `bevy_mod_picking` | Superseded by the built-in gizmo |
+| `bevy_editor_pls`, `bevy_infinite_grid` | **no** (Bevy 0.14 / 0.18) | Not needed |
+| `WireframePlugin` (built-in) | yes, but native-only and depth-tested | Not suitable for the x-ray overlay or Wasm |
 
 ## Phase 2: WebAssembly
 

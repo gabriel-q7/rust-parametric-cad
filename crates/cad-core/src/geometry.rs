@@ -5,12 +5,16 @@
 //! (millimeters) and in the document's Z-up frame. Renderers convert a
 //! `TriMesh` into their own mesh type; a future B-rep kernel can replace the
 //! tessellator without changing the document model.
+//!
+//! Primitives can be converted into an [`EditableMesh`] for direct topology
+//! editing ([`Geometry::Mesh`]). Conversion is one-way.
 
 use std::f64::consts::{PI, TAU};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::mesh::{EditableMesh, MeshError};
 use crate::parameters::{BoxParameters, CylinderParameters, ParameterDescriptor, SphereParameters};
 use crate::validation::ValidationError;
 
@@ -53,30 +57,57 @@ impl fmt::Display for PrimitiveKind {
     }
 }
 
-/// Parametric geometry of a feature.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Geometry of a feature: a parametric primitive or an editable mesh.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Geometry {
     Box(BoxParameters),
     Sphere(SphereParameters),
     Cylinder(CylinderParameters),
+    /// Direct-editable topology, created by converting a primitive.
+    Mesh(EditableGeometry),
+}
+
+/// An editable mesh plus where it came from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EditableGeometry {
+    pub mesh: EditableMesh,
+    /// Read-only provenance: the parametric geometry this mesh was converted
+    /// from. It is not kept in sync with later topology edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Box<Geometry>>,
 }
 
 /// Error returned when editing a parameter by key.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ParameterError {
-    #[error("{kind} has no parameter named '{key}'")]
-    UnknownParameter { kind: PrimitiveKind, key: String },
+    #[error("{geometry} has no parameter named '{key}'")]
+    UnknownParameter { geometry: &'static str, key: String },
     #[error(transparent)]
     Invalid(#[from] ValidationError),
 }
 
 impl Geometry {
-    pub fn kind(&self) -> PrimitiveKind {
+    /// The parametric primitive kind, or `None` for an editable mesh.
+    pub fn primitive_kind(&self) -> Option<PrimitiveKind> {
         match self {
-            Geometry::Box(_) => PrimitiveKind::Box,
-            Geometry::Sphere(_) => PrimitiveKind::Sphere,
-            Geometry::Cylinder(_) => PrimitiveKind::Cylinder,
+            Geometry::Box(_) => Some(PrimitiveKind::Box),
+            Geometry::Sphere(_) => Some(PrimitiveKind::Sphere),
+            Geometry::Cylinder(_) => Some(PrimitiveKind::Cylinder),
+            Geometry::Mesh(_) => None,
+        }
+    }
+
+    /// Short display label: "Box", "Sphere", "Cylinder", or "Mesh".
+    pub fn label(&self) -> &'static str {
+        self.primitive_kind().map_or("Mesh", PrimitiveKind::label)
+    }
+
+    /// The editable mesh, if this geometry has been converted.
+    pub fn as_editable(&self) -> Option<&EditableGeometry> {
+        match self {
+            Geometry::Mesh(editable) => Some(editable),
+            _ => None,
         }
     }
 
@@ -85,15 +116,28 @@ impl Geometry {
             Geometry::Box(p) => p.validate(),
             Geometry::Sphere(p) => p.validate(),
             Geometry::Cylinder(p) => p.validate(),
+            Geometry::Mesh(editable) => {
+                editable
+                    .mesh
+                    .validate()
+                    .map_err(|err| ValidationError::Mesh(Box::new(err)))?;
+                match editable.source.as_deref() {
+                    None => Ok(()),
+                    Some(Geometry::Mesh(_)) => Err(ValidationError::InvalidSource),
+                    Some(source) => source.validate(),
+                }
+            }
         }
     }
 
-    /// Editable parameters of this geometry, in display order.
+    /// Editable parameters of this geometry, in display order. Editable
+    /// meshes have none: they are edited through their topology.
     pub fn parameters(&self) -> Vec<ParameterDescriptor> {
         match self {
             Geometry::Box(p) => p.descriptors(),
             Geometry::Sphere(p) => p.descriptors(),
             Geometry::Cylinder(p) => p.descriptors(),
+            Geometry::Mesh(_) => Vec::new(),
         }
     }
 
@@ -104,7 +148,7 @@ impl Geometry {
         for &(key, value) in values {
             let slot = current.iter_mut().find(|d| d.key == key).ok_or_else(|| {
                 ParameterError::UnknownParameter {
-                    kind: self.kind(),
+                    geometry: self.label(),
                     key: key.to_owned(),
                 }
             })?;
@@ -127,8 +171,27 @@ impl Geometry {
             Geometry::Cylinder(_) => {
                 Geometry::Cylinder(CylinderParameters::new(get("radius"), get("height"))?)
             }
+            Geometry::Mesh(_) => self.clone(),
         };
         Ok(geometry)
+    }
+
+    /// Converts a parametric primitive into an editable mesh with the given
+    /// resolution, keeping the primitive as provenance. Returns `None` if the
+    /// geometry is already a mesh.
+    pub fn to_editable(&self, quality: &Tessellation) -> Option<Result<Geometry, MeshError>> {
+        let mesh = match self {
+            Geometry::Box(p) => box_topology(p),
+            Geometry::Sphere(p) => sphere_topology(p, quality),
+            Geometry::Cylinder(p) => cylinder_topology(p, quality),
+            Geometry::Mesh(_) => return None,
+        };
+        Some(mesh.map(|mesh| {
+            Geometry::Mesh(EditableGeometry {
+                mesh,
+                source: Some(Box::new(self.clone())),
+            })
+        }))
     }
 
     /// Generates a triangle mesh with the given tessellation quality.
@@ -137,8 +200,99 @@ impl Geometry {
             Geometry::Box(p) => tessellate_box(p),
             Geometry::Sphere(p) => tessellate_sphere(p, quality),
             Geometry::Cylinder(p) => tessellate_cylinder(p, quality),
+            Geometry::Mesh(editable) => editable.mesh.triangulate(),
         }
     }
+}
+
+/// Topology of a box: 8 vertices, 12 edges, 6 quads.
+fn box_topology(p: &BoxParameters) -> Result<EditableMesh, MeshError> {
+    let (hx, hy, h) = (p.width() / 2.0, p.depth() / 2.0, p.height());
+    // Vertex index = i + 2j + 4k for x = -/+ (i), y = -/+ (j), z = 0/h (k).
+    let positions: Vec<[f64; 3]> = (0..8)
+        .map(|n| {
+            let pick = |bit: usize, lo: f64, hi: f64| if n & bit == 0 { lo } else { hi };
+            [pick(1, -hx, hx), pick(2, -hy, hy), pick(4, 0.0, h)]
+        })
+        .collect();
+    let faces = [
+        vec![0, 2, 3, 1], // bottom (-Z)
+        vec![4, 5, 7, 6], // top (+Z)
+        vec![0, 1, 5, 4], // front (-Y)
+        vec![2, 6, 7, 3], // back (+Y)
+        vec![0, 4, 6, 2], // left (-X)
+        vec![1, 3, 7, 5], // right (+X)
+    ];
+    EditableMesh::from_polygons(&positions, &faces)
+}
+
+/// Topology of a cylinder: two rings, side quads, and two n-gon caps.
+fn cylinder_topology(
+    p: &CylinderParameters,
+    quality: &Tessellation,
+) -> Result<EditableMesh, MeshError> {
+    let n = quality.radial_segments.max(3) as usize;
+    let (r, h) = (p.radius(), p.height());
+    let mut positions = Vec::with_capacity(2 * n);
+    for z in [0.0, h] {
+        for j in 0..n {
+            let (s, c) = (TAU * j as f64 / n as f64).sin_cos();
+            positions.push([r * c, r * s, z]);
+        }
+    }
+    let (bottom, top) = (|j: usize| j % n, |j: usize| n + j % n);
+    let mut faces: Vec<Vec<usize>> = (0..n)
+        .map(|j| vec![bottom(j), bottom(j + 1), top(j + 1), top(j)])
+        .collect();
+    faces.push((0..n).map(top).collect());
+    faces.push((0..n).rev().map(bottom).collect());
+    EditableMesh::from_polygons(&positions, &faces)
+}
+
+/// Topology of a UV sphere: pole triangles and planar quads in between.
+fn sphere_topology(
+    p: &SphereParameters,
+    quality: &Tessellation,
+) -> Result<EditableMesh, MeshError> {
+    let segments = quality.radial_segments.max(3) as usize;
+    let rings = quality.sphere_rings.max(2) as usize;
+    let r = p.radius();
+    // Index 0: north pole; then (rings - 1) rings of `segments` vertices;
+    // last: south pole.
+    let mut positions = vec![[0.0, 0.0, 2.0 * r]];
+    for i in 1..rings {
+        let theta = PI * i as f64 / rings as f64;
+        for j in 0..segments {
+            let phi = TAU * j as f64 / segments as f64;
+            positions.push([
+                r * theta.sin() * phi.cos(),
+                r * theta.sin() * phi.sin(),
+                r + r * theta.cos(),
+            ]);
+        }
+    }
+    let south = positions.len();
+    positions.push([0.0, 0.0, 0.0]);
+    let ring = |i: usize, j: usize| 1 + (i - 1) * segments + j % segments;
+
+    let mut faces = Vec::new();
+    for j in 0..segments {
+        faces.push(vec![0, ring(1, j), ring(1, j + 1)]);
+    }
+    for i in 1..rings - 1 {
+        for j in 0..segments {
+            faces.push(vec![
+                ring(i, j),
+                ring(i + 1, j),
+                ring(i + 1, j + 1),
+                ring(i, j + 1),
+            ]);
+        }
+    }
+    for j in 0..segments {
+        faces.push(vec![ring(rings - 1, j), south, ring(rings - 1, j + 1)]);
+    }
+    EditableMesh::from_polygons(&positions, &faces)
 }
 
 /// Tessellation quality settings.
@@ -148,6 +302,15 @@ pub struct Tessellation {
     pub radial_segments: u32,
     /// Number of latitude bands on a sphere.
     pub sphere_rings: u32,
+}
+
+impl Tessellation {
+    /// Resolution used when converting primitives to editable meshes:
+    /// coarser than rendering so that the topology stays easy to edit.
+    pub const EDITABLE: Tessellation = Tessellation {
+        radial_segments: 24,
+        sphere_rings: 12,
+    };
 }
 
 impl Default for Tessellation {

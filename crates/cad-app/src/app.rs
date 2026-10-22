@@ -40,7 +40,8 @@ fn demo_document() -> Document {
         ),
     ];
     for (geometry, translation) in items {
-        let name = doc.suggest_name(geometry.kind());
+        let kind = geometry.primitive_kind().expect("demo uses primitives");
+        let name = doc.suggest_name(kind);
         doc.apply(Command::create(
             &name,
             geometry,

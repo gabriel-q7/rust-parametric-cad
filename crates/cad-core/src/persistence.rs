@@ -6,7 +6,7 @@
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::document::{CURRENT_SCHEMA_VERSION, Document};
+use crate::document::{CURRENT_SCHEMA_VERSION, Document, MIN_SUPPORTED_SCHEMA_VERSION};
 use crate::validation::ValidationError;
 
 /// Errors produced while loading or saving a document.
@@ -16,8 +16,12 @@ pub enum PersistenceError {
     Malformed(#[from] serde_json::Error),
     #[error("project file is missing a numeric 'schema_version'")]
     MissingSchemaVersion,
-    #[error("unsupported schema version {found} (this build supports version {supported})")]
-    UnsupportedSchemaVersion { found: u64, supported: u32 },
+    #[error("unsupported schema version {found} (this build reads versions {oldest} to {newest})")]
+    UnsupportedSchemaVersion {
+        found: u64,
+        oldest: u32,
+        newest: u32,
+    },
     #[error("invalid project data: {0}")]
     Invalid(#[from] ValidationError),
 }
@@ -37,13 +41,18 @@ pub fn from_json(json: &str) -> Result<Document, PersistenceError> {
         .get("schema_version")
         .and_then(Value::as_u64)
         .ok_or(PersistenceError::MissingSchemaVersion)?;
-    if version != u64::from(CURRENT_SCHEMA_VERSION) {
+    let supported = u64::from(MIN_SUPPORTED_SCHEMA_VERSION)..=u64::from(CURRENT_SCHEMA_VERSION);
+    if !supported.contains(&version) {
         return Err(PersistenceError::UnsupportedSchemaVersion {
             found: version,
-            supported: CURRENT_SCHEMA_VERSION,
+            oldest: MIN_SUPPORTED_SCHEMA_VERSION,
+            newest: CURRENT_SCHEMA_VERSION,
         });
     }
-    let document: Document = serde_json::from_value(value)?;
+    // Every older supported version is a subset of the current one, so no
+    // migration step is needed yet; the document is simply marked current.
+    let mut document: Document = serde_json::from_value(value)?;
     document.validate()?;
+    document.upgrade_schema();
     Ok(document)
 }

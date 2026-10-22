@@ -18,7 +18,7 @@ fn creates_each_supported_primitive() {
     for kind in PrimitiveKind::ALL {
         let id = create(&mut doc, kind);
         let feature = doc.feature(id).unwrap();
-        assert_eq!(feature.geometry().kind(), kind);
+        assert_eq!(feature.geometry().primitive_kind(), Some(kind));
         assert_eq!(feature.name(), format!("{} 1", kind.label()));
     }
     assert_eq!(doc.len(), 3);
@@ -59,7 +59,7 @@ fn updating_parameters_preserves_identity_and_other_state() {
     let applied = doc
         .apply(Command::UpdateParameters {
             id,
-            geometry: new_geometry,
+            geometry: new_geometry.clone(),
         })
         .unwrap();
 
@@ -78,7 +78,7 @@ fn invalid_parameter_update_leaves_document_unchanged() {
     let before = doc.clone();
 
     // Edits arrive from the UI as key/value pairs; validation happens first.
-    let current = *doc.feature(id).unwrap().geometry();
+    let current = doc.feature(id).unwrap().geometry().clone();
     assert!(current.with_parameters(&[("width", 0.0)]).is_err());
     assert!(current.with_parameters(&[("height", -4.0)]).is_err());
 

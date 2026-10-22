@@ -13,10 +13,12 @@ use std::path::PathBuf;
 use bevy::input_focus::tab_navigation::TabNavigationPlugin;
 use bevy::prelude::*;
 use bevy::text::EditableText;
-use cad_core::{Command, Document, ObjectId, PrimitiveKind, Transform3D};
+use cad_core::{Command, Document, EditableMesh, ObjectId, PrimitiveKind, Transform3D};
 
 use crate::commands::{EditCommand, ProjectCommand};
-use crate::editor::{CadDocument, EditorSystems, Selection, Status, StatusLevel};
+use crate::editor::{
+    CadDocument, EditMode, EditorSystems, Selection, Status, StatusLevel, TopologyElement,
+};
 use crate::viewport::ResetCamera;
 use inspector::InspectorRequest;
 
@@ -35,6 +37,12 @@ pub enum UiAction {
     ApplyProperties,
     RevertProperties,
     DeleteSelected,
+    ConvertToEditable,
+    SetEditMode(EditMode),
+    /// Select the next (+1) or previous (-1) element of the current mode.
+    StepElement(i32),
+    /// Apply the topology panel (move vertex, translate edge, extrude face).
+    ApplyTopology,
 }
 
 /// Marks the toolbar text field holding the project file path.
@@ -66,7 +74,7 @@ impl Plugin for EditorUiPlugin {
                         .in_set(EditorSystems::Input),
                     (
                         object_list::rebuild_object_list,
-                        object_list::scroll_object_list,
+                        object_list::scroll_panels,
                         inspector::rebuild_inspector,
                         update_status_bar,
                         widgets::button_visuals,
@@ -147,8 +155,84 @@ fn handle_ui_actions(
                 }
                 None => status.info("Nothing selected to delete"),
             },
+            UiAction::ConvertToEditable => match selection.get() {
+                Some(id) => {
+                    edits.write(EditCommand(Command::ConvertToEditable { id }));
+                }
+                None => status.info("Nothing selected to convert"),
+            },
+            UiAction::SetEditMode(mode) => {
+                let feature = selection.get().and_then(|id| doc.feature(id));
+                match feature {
+                    Some(f) if mode == EditMode::Object || f.geometry().as_editable().is_some() => {
+                        selection.set_mode(mode);
+                    }
+                    Some(f) => status.info(format!(
+                        "Convert '{}' to an editable mesh to edit its topology",
+                        f.name()
+                    )),
+                    None => status.info("Select an editable mesh first"),
+                }
+            }
+            UiAction::StepElement(step) => {
+                let mesh = selection
+                    .get()
+                    .and_then(|id| doc.feature(id))
+                    .and_then(|f| f.geometry().as_editable())
+                    .map(|e| &e.mesh);
+                if let Some(mesh) = mesh
+                    && let Some(element) =
+                        step_element(mesh, selection.mode(), selection.element(), step)
+                {
+                    selection.select_element(element);
+                }
+            }
+            UiAction::ApplyTopology => {
+                inspector.write(InspectorRequest::Topology);
+            }
         }
     }
+}
+
+/// All elements of the kind selected by `mode`, in mesh order.
+pub fn elements_of(mesh: &EditableMesh, mode: EditMode) -> Vec<TopologyElement> {
+    match mode {
+        EditMode::Object => Vec::new(),
+        EditMode::Vertex => mesh
+            .vertices()
+            .iter()
+            .map(|v| TopologyElement::Vertex(v.id))
+            .collect(),
+        EditMode::Edge => mesh
+            .edges()
+            .iter()
+            .map(|e| TopologyElement::Edge(e.id))
+            .collect(),
+        EditMode::Face => mesh
+            .faces()
+            .iter()
+            .map(|f| TopologyElement::Face(f.id))
+            .collect(),
+    }
+}
+
+/// The element `step` positions after `current` (wrapping), or the first /
+/// last element when nothing is selected yet. This is the keyboard/button
+/// fallback for elements that are hard to click in the viewport.
+fn step_element(
+    mesh: &EditableMesh,
+    mode: EditMode,
+    current: Option<TopologyElement>,
+    step: i32,
+) -> Option<TopologyElement> {
+    let all = elements_of(mesh, mode);
+    let len = i64::try_from(all.len()).ok().filter(|&n| n > 0)?;
+    let index = match current.and_then(|c| all.iter().position(|e| *e == c)) {
+        Some(i) => (i as i64 + i64::from(step)).rem_euclid(len),
+        None if step >= 0 => 0,
+        None => len - 1,
+    };
+    all.get(index as usize).copied()
 }
 
 /// Picks a spot on a 150 mm grid not occupied by another object's origin,
@@ -205,5 +289,24 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(free_slot(&doc), [-150.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn stepping_wraps_around_elements_of_the_current_mode() {
+        let mesh = PrimitiveKind::Box
+            .default_geometry()
+            .to_editable(&cad_core::Tessellation::EDITABLE)
+            .unwrap()
+            .unwrap();
+        let mesh = &mesh.as_editable().unwrap().mesh;
+        let faces = elements_of(mesh, EditMode::Face);
+        assert_eq!(faces.len(), 6);
+        assert_eq!(step_element(mesh, EditMode::Face, None, 1), Some(faces[0]));
+        assert_eq!(step_element(mesh, EditMode::Face, None, -1), Some(faces[5]));
+        assert_eq!(
+            step_element(mesh, EditMode::Face, Some(faces[5]), 1),
+            Some(faces[0])
+        );
+        assert_eq!(step_element(mesh, EditMode::Object, None, 1), None);
     }
 }

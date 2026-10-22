@@ -29,7 +29,11 @@ toolbar's File field and click **Open**.
 - Selection in the viewport or the object list; rename and delete.
 - A properties inspector with dimensions, position, and rotation, applied atomically.
   Invalid input is rejected with a clear message.
-- JSON projects with a schema version, units, and stable UUIDs, all validated on load.
+- **Direct mesh editing**: convert a primitive into an editable mesh, then pick
+  vertices, edges, and faces in the viewport to move vertices, translate edges,
+  and extrude planar faces. Each element has a stable topology ID.
+- JSON projects with a schema version (now 2; version 1 files still open), units,
+  and stable UUIDs, all validated on load.
 
 ## Repository layout
 
@@ -46,7 +50,7 @@ docs/             documentation
 | --- | --- |
 | [User guide](docs/user-guide.md) | installing, using the editor, controls, troubleshooting |
 | [Architecture](docs/architecture.md) | crates, data model, commands, frame schedule, coordinate frames |
-| [Project file format](docs/file-format.md) | the `.cad.json` specification (schema version 1) |
+| [Project file format](docs/file-format.md) | the `.cad.json` specification (schema version 2) |
 | [Development guide](docs/development.md) | build, tests, conventions, adding primitives and commands |
 | [Design decisions](docs/decisions.md) | why things are built the way they are |
 | [Roadmap and limitations](docs/roadmap.md) | known limitations, next steps, Phase 2 checklist |

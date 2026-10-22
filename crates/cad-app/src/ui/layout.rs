@@ -8,7 +8,7 @@ use bevy::ui::RelativeCursorPosition;
 use cad_core::PrimitiveKind;
 
 use super::inspector::InspectorPanel;
-use super::object_list::ObjectList;
+use super::object_list::{ObjectList, WheelScroll};
 use super::widgets::{
     ACCENT_BG, PANEL_BG, SECTION_BG, TEXT, TEXT_DIM, TOOLBAR_BG, button, colored_button, label,
     text_field,
@@ -146,13 +146,14 @@ fn spawn_sidebar(middle: &mut ChildSpawnerCommands) {
             side.spawn((
                 Name::new("Object list"),
                 ObjectList,
+                WheelScroll,
                 RelativeCursorPosition::default(),
                 ScrollPosition::default(),
                 Node {
                     flex_direction: FlexDirection::Column,
                     row_gap: px(2),
                     padding: UiRect::all(px(4)),
-                    height: px(220),
+                    height: px(170),
                     flex_shrink: 0.0,
                     overflow: Overflow::scroll_y(),
                     ..default()
@@ -163,10 +164,16 @@ fn spawn_sidebar(middle: &mut ChildSpawnerCommands) {
             side.spawn((
                 Name::new("Inspector"),
                 InspectorPanel,
+                WheelScroll,
+                RelativeCursorPosition::default(),
+                ScrollPosition::default(),
                 Node {
                     flex_direction: FlexDirection::Column,
                     row_gap: px(6),
                     padding: UiRect::all(px(8)),
+                    flex_grow: 1.0,
+                    min_height: px(0),
+                    overflow: Overflow::scroll_y(),
                     ..default()
                 },
                 BackgroundColor(SECTION_BG),

@@ -22,4 +22,7 @@
 | **Command** | A data value that describes one document mutation (`cad_core::Command`). |
 | **Inverse** | The command that undoes an applied command; returned by every `apply`. |
 | **TriMesh** | Renderer-agnostic triangle mesh generated from geometry (derived data). |
+| **Editable mesh** | Geometry converted from a primitive into explicit vertices, edges, and faces (`Geometry::Mesh`). |
+| **Topology ID** | `VertexId`, `EdgeId`, or `FaceId`: stable within one mesh and never reused. |
+| **Edit mode** | What viewport clicks select: object, vertex, edge, or face. |
 | **Render entity** | The Bevy entity that displays a feature. Derived from the document; never persisted. |

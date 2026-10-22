@@ -83,7 +83,15 @@ fn loads_a_hand_written_file() {
         shaft.id().to_string(),
         "6f1c2a3e-8a7b-4c1d-9e2f-0a1b2c3d4e5f"
     );
-    assert_eq!(shaft.geometry().kind(), PrimitiveKind::Cylinder);
+    assert_eq!(
+        shaft.geometry().primitive_kind(),
+        Some(PrimitiveKind::Cylinder)
+    );
+    assert_eq!(
+        doc.schema_version(),
+        CURRENT_SCHEMA_VERSION,
+        "v1 files are upgraded on load"
+    );
     assert_eq!(
         *shaft.transform(),
         Transform3D::default(),
@@ -173,10 +181,10 @@ fn loaded_documents_must_pass_validation() {
 
 #[test]
 fn errors_have_readable_messages() {
-    let err = from_json(r#"{"schema_version": 2, "units": "mm", "features": []}"#).unwrap_err();
+    let err = from_json(r#"{"schema_version": 3, "units": "mm", "features": []}"#).unwrap_err();
     assert_eq!(
         err.to_string(),
-        "unsupported schema version 2 (this build supports version 1)"
+        "unsupported schema version 3 (this build reads versions 1 to 2)"
     );
 }
 

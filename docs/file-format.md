@@ -1,7 +1,16 @@
 # Project file format
 
 Projects are UTF-8 JSON files, usually named `*.cad.json`. This page specifies
-**schema version 1**, the only version this build reads and writes.
+**schema version 2**. This build writes version 2 and reads versions 1 and 2.
+
+| Version | Adds |
+| --- | --- |
+| 1 | Parametric primitives: `box`, `sphere`, `cylinder` |
+| 2 | Editable meshes: `"type": "mesh"` |
+
+Every version 1 file is also a valid version 2 file. On load it is accepted as
+is and marked as version 2, so the next save writes `"schema_version": 2`. Older
+builds cannot read version 2 files.
 
 The implementation is in [`crates/cad-core/src/persistence.rs`](../crates/cad-core/src/persistence.rs).
 The tests in [`crates/cad-core/tests/persistence.rs`](../crates/cad-core/tests/persistence.rs)
@@ -36,7 +45,7 @@ For a complete file, see [`examples/demo.cad.json`](../examples/demo.cad.json).
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `schema_version` | integer | yes | Must be `1`. |
+| `schema_version` | integer | yes | `1` or `2`. Written as `2`. |
 | `units` | string | yes | Length unit. Only `"mm"` is supported. |
 | `features` | array of [feature](#feature) | yes | Objects in creation order. The order is preserved. |
 
@@ -61,6 +70,47 @@ For a complete file, see [`examples/demo.cad.json`](../examples/demo.cad.json).
 
 Every parameter is required and must be a finite number with `0 < value ≤ 1,000,000`.
 
+### Editable mesh (`"type": "mesh"`, version 2)
+
+```json
+"geometry": {
+  "type": "mesh",
+  "mesh": {
+    "vertices": [ { "id": 0, "position": [-50.0, -50.0, 0.0] }, ... ],
+    "edges":    [ { "id": 8, "vertices": [0, 2] }, ... ],
+    "faces":    [ { "id": 20, "vertices": [0, 2, 3, 1] }, ... ],
+    "next_id": 26
+  },
+  "source": { "type": "box", "width": 100.0, "depth": 100.0, "height": 100.0 }
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `mesh.vertices[]` | `id` (integer) and `position` (`[x, y, z]` in mm, the object's local frame). |
+| `mesh.edges[]` | `id` and `vertices`: the IDs of its two endpoint vertices. |
+| `mesh.faces[]` | `id` and `vertices`: the boundary vertex IDs, counter-clockwise when seen from outside. |
+| `mesh.next_id` | The next unused topology ID. New elements take IDs from here, and IDs are never reused. |
+| `source` | Optional, read-only provenance: the parametric primitive the mesh was converted from. It is not updated by later edits. |
+
+Topology IDs are unique across vertices, edges, and faces of the same mesh. They
+are only meaningful within that mesh.
+
+A mesh must satisfy all of the following:
+
+- Every ID is unique and less than `next_id`.
+- Positions are finite with `|value| ≤ 1,000,000`.
+- Each edge joins two different existing vertices, has a non-zero length, and is
+  the only edge between those two vertices.
+- Each face has at least 3 distinct vertices and a non-zero area. Every pair of
+  consecutive boundary vertices (including last → first) is joined by an edge.
+- The surface is closed and consistently oriented: every edge is walked exactly
+  once in each direction by the face boundaries.
+- Every vertex belongs to at least one face.
+- `source`, if present, is a valid `box`, `sphere`, or `cylinder`.
+
+Faces do not have to be planar. Only extrusion requires planar, convex faces.
+
 ## Transform
 
 | Field | Type | Description |
@@ -81,13 +131,15 @@ parameters.
 
 1. **Version check.** The JSON is parsed as a generic value and `schema_version` is read.
    - Missing, or not a non-negative integer → `MissingSchemaVersion`.
-   - Any value other than `1` → `UnsupportedSchemaVersion`.
+   - Any value outside `1..=2` → `UnsupportedSchemaVersion`.
 2. **Typed parse.** The value is converted into a `Document`. Invalid JSON, a wrong type, a
    missing field, an unknown `type`, an unknown `units` value, or an invalid UUID →
    `Malformed`.
 3. **Validation.** `Document::validate` checks the rules above: positive and bounded
-   dimensions, finite transforms, non-empty names, and unique IDs. Any violation →
-   `Invalid`. The error names the feature ID that failed.
+   dimensions, finite transforms, non-empty names, unique IDs, and the mesh
+   invariants. Any violation → `Invalid`. The error names the feature ID that failed.
+4. **Upgrade.** Version 1 documents are marked as version 2. No data changes
+   are needed.
 
 Unknown extra fields are ignored.
 
@@ -103,6 +155,7 @@ first and then renames that file over the target path.
   changes.
 - Adding optional fields that older readers can safely ignore does not require a new
   version.
-- When version 2 exists, the reader should upgrade version 1 files step by step: parse the
-  generic value, run `migrate_v1_to_v2`, then do the typed parse. The version check already
-  happens before the typed parse, which is where such a migration step would go.
+- If a future version changes existing data rather than only adding to it, add a
+  migration step between the version check and the typed parse in
+  `persistence::from_json`. Migrate one version at a time
+  (`migrate_v2_to_v3`, …), working on the generic JSON value.

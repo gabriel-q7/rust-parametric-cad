@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use cad_core::{Command, Document, ObjectId};
 
-use crate::editor::{CadDocument, EditorSystems, Selection, Status};
+use crate::editor::{CadDocument, EditMode, EditorSystems, Selection, Status, TopologyElement};
 
 /// Request to apply a document command.
 #[derive(Message, Debug, Clone)]
@@ -90,9 +90,10 @@ fn apply_edit_commands(
                 if let Some(id) = created {
                     selection.select(id);
                 }
-                if selection.get().is_some_and(|id| !doc.contains(id)) {
-                    selection.clear();
+                if let Some(face) = applied.new_face {
+                    selection.select_element(TopologyElement::Face(face));
                 }
+                fix_up_selection(&mut selection, &doc);
                 status.success(format!("{verb} {subject}"));
                 changed.write(DocumentChanged {
                     affected: applied.affected,
@@ -142,6 +143,30 @@ fn handle_project_commands(
     }
 }
 
+/// Drops selection state that no longer matches the document: a deleted
+/// object, a topology element that an edit removed, or a topology mode on a
+/// parametric object.
+fn fix_up_selection(selection: &mut Selection, doc: &Document) {
+    let Some(id) = selection.get() else {
+        return;
+    };
+    let Some(feature) = doc.feature(id) else {
+        selection.clear();
+        return;
+    };
+    match feature.geometry().as_editable() {
+        Some(editable) => {
+            if selection
+                .element()
+                .is_some_and(|e| !e.exists_in(&editable.mesh))
+            {
+                selection.clear_element();
+            }
+        }
+        None => selection.set_mode(EditMode::Object),
+    }
+}
+
 fn verb(command: &Command) -> &'static str {
     match command {
         Command::CreatePrimitive { .. } => "Created",
@@ -150,6 +175,10 @@ fn verb(command: &Command) -> &'static str {
         Command::DeleteObject { .. } => "Deleted",
         Command::SetObjectTransform { .. } => "Moved",
         Command::InsertFeature { .. } => "Restored",
+        Command::ConvertToEditable { .. } => "Converted to an editable mesh:",
+        Command::MoveVertex { .. } => "Moved a vertex of",
+        Command::TranslateEdge { .. } => "Moved an edge of",
+        Command::ExtrudeFace { .. } => "Extruded a face of",
     }
 }
 
@@ -166,7 +195,11 @@ fn subject_name(command: &Command, doc: &Document) -> String {
         Command::UpdateParameters { id, .. }
         | Command::RenameObject { id, .. }
         | Command::DeleteObject { id }
-        | Command::SetObjectTransform { id, .. } => *id,
+        | Command::SetObjectTransform { id, .. }
+        | Command::ConvertToEditable { id }
+        | Command::MoveVertex { id, .. }
+        | Command::TranslateEdge { id, .. }
+        | Command::ExtrudeFace { id, .. } => *id,
     };
     doc.feature(id)
         .map_or_else(|| format!("object {id}"), |f| format!("'{}'", f.name()))

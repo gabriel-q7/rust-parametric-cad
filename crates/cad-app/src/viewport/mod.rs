@@ -5,6 +5,7 @@ mod camera;
 mod convert;
 mod objects;
 mod scene;
+mod topology;
 
 use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::HoverMap;
@@ -23,6 +24,7 @@ impl Plugin for ViewportPlugin {
             scene::ScenePlugin,
             camera::OrbitCameraPlugin,
             objects::ObjectsPlugin,
+            topology::TopologyPlugin,
         ));
     }
 }

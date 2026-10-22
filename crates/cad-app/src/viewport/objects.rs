@@ -15,7 +15,7 @@ use cad_core::{Document, Feature, Geometry, ObjectId, Tessellation};
 
 use super::convert::{CAD_TO_BEVY, mesh_from_trimesh, transform_from_cad};
 use crate::commands::DocumentChanged;
-use crate::editor::{CadDocument, EditorSystems, Selection};
+use crate::editor::{CadDocument, EditMode, EditorSystems, Selection};
 
 /// Links a render entity to its document object.
 #[derive(Component, Debug, Clone, Copy)]
@@ -24,7 +24,7 @@ pub struct CadObject {
 }
 
 /// Geometry the entity's current mesh was generated from.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone)]
 struct RenderedGeometry(Geometry);
 
 /// Parent of all CAD objects; converts the CAD Z-up frame to Bevy's Y-up.
@@ -34,6 +34,12 @@ struct CadRoot;
 /// Explicit mapping from stable document IDs to runtime entities.
 #[derive(Resource, Default, Debug)]
 pub struct ObjectEntityMap(HashMap<ObjectId, Entity>);
+
+impl ObjectEntityMap {
+    pub fn get(&self, id: ObjectId) -> Option<Entity> {
+        self.0.get(&id).copied()
+    }
+}
 
 #[derive(Resource)]
 struct ObjectMaterials {
@@ -121,7 +127,7 @@ fn sync_objects(
                     if let Some(mut asset) = meshes.get_mut(&mesh.0) {
                         *asset = mesh_from_trimesh(&tri, doc.units());
                     }
-                    rendered.0 = *feature.geometry();
+                    rendered.0 = feature.geometry().clone();
                 }
             }
             (Some(feature), None) => {
@@ -159,7 +165,7 @@ fn spawn_object(
         .spawn((
             Name::new(feature.name().to_owned()),
             CadObject { id: feature.id() },
-            RenderedGeometry(*feature.geometry()),
+            RenderedGeometry(feature.geometry().clone()),
             Mesh3d(meshes.add(mesh_from_trimesh(&tri, doc.units()))),
             MeshMaterial3d(materials.normal.clone()),
             transform_from_cad(feature.transform(), doc.units()),
@@ -197,6 +203,10 @@ fn select_on_click(
     // only react to the first trigger and look at what was actually hit.
     let target = click.original_event_target();
     if click.button != PointerButton::Primary || click.event_target() != target {
+        return;
+    }
+    // In vertex/edge/face mode, clicks pick topology instead (see `topology`).
+    if selection.mode() != EditMode::Object {
         return;
     }
     if let Ok(object) = objects.get(target) {
@@ -279,7 +289,12 @@ mod tests {
         );
         assert_eq!(entity_of(&app, id), Some(entity));
         assert_eq!(app.world().get::<Mesh3d>(entity).unwrap().0, before);
-        let rendered = app.world().get::<RenderedGeometry>(entity).unwrap().0;
+        let rendered = app
+            .world()
+            .get::<RenderedGeometry>(entity)
+            .unwrap()
+            .0
+            .clone();
         assert_eq!(
             rendered,
             Geometry::Sphere(SphereParameters::new(5.0).unwrap())
@@ -344,5 +359,80 @@ mod tests {
         assert!(app.world().resource::<ObjectEntityMap>().0.is_empty());
         let mut objects = app.world_mut().query::<&CadObject>();
         assert_eq!(objects.iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn convert_and_extrude_update_the_same_entity_and_select_the_cap() {
+        use crate::editor::{EditMode, TopologyElement};
+
+        let mut app = app();
+        let create = Command::create(
+            "Block",
+            PrimitiveKind::Box.default_geometry(),
+            Transform3D::from_translation([100.0, 0.0, 0.0]),
+        );
+        let Command::CreatePrimitive { id, .. } = create else {
+            unreachable!()
+        };
+        send(&mut app, create);
+        let entity = entity_of(&app, id).unwrap();
+        assert_eq!(mesh_vertex_count(&app, entity), 24, "parametric box");
+
+        send(&mut app, Command::ConvertToEditable { id });
+        assert_eq!(entity_of(&app, id), Some(entity), "identity preserved");
+        assert_eq!(mesh_vertex_count(&app, entity), 24, "6 flat quads");
+        let doc = &app.world().resource::<CadDocument>().0;
+        let top = doc
+            .feature(id)
+            .unwrap()
+            .geometry()
+            .as_editable()
+            .unwrap()
+            .mesh
+            .faces()[1]
+            .id;
+
+        app.world_mut()
+            .resource_mut::<Selection>()
+            .select_element(TopologyElement::Face(top));
+        send(
+            &mut app,
+            Command::ExtrudeFace {
+                id,
+                face: top,
+                distance: 30.0,
+            },
+        );
+        assert_eq!(entity_of(&app, id), Some(entity));
+        // 9 quads + 1 cap, flat-shaded: 10 faces x 4 vertices.
+        assert_eq!(mesh_vertex_count(&app, entity), 40);
+        let translation = app.world().get::<Transform>(entity).unwrap().translation;
+        assert!(
+            translation.abs_diff_eq(Vec3::new(0.1, 0.0, 0.0), 1e-6),
+            "transform kept"
+        );
+
+        let selection = *app.world().resource::<Selection>();
+        assert_eq!(selection.mode(), EditMode::Face);
+        let Some(TopologyElement::Face(cap)) = selection.element() else {
+            panic!("cap face should be selected, got {selection:?}");
+        };
+        assert_ne!(cap, top, "the extruded face was replaced by a new cap");
+
+        // A failing extrusion keeps the document and reports an error.
+        let before = app.world().resource::<CadDocument>().0.clone();
+        send(
+            &mut app,
+            Command::ExtrudeFace {
+                id,
+                face: top,
+                distance: 5.0,
+            },
+        );
+        assert_eq!(app.world().resource::<CadDocument>().0, before);
+        assert_eq!(
+            app.world().resource::<crate::editor::Status>().level,
+            crate::editor::StatusLevel::Error
+        );
     }
 }

@@ -8,11 +8,20 @@ use thiserror::Error;
 use crate::command::{Applied, Command};
 use crate::feature::{Feature, ObjectId};
 use crate::geometry::PrimitiveKind;
+use crate::mesh::MeshError;
 use crate::units::LengthUnit;
 use crate::validation::ValidationError;
 
-/// Schema version written by this build and the only one it can read.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+/// Schema version written by this build.
+///
+/// History:
+/// - 1: parametric primitives (box, sphere, cylinder).
+/// - 2: adds editable meshes (`"type": "mesh"`). Version 1 files are valid
+///   version 2 files, so they load unchanged.
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+
+/// Oldest schema version this build can read.
+pub const MIN_SUPPORTED_SCHEMA_VERSION: u32 = 1;
 
 /// Errors produced when mutating a document.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -23,6 +32,12 @@ pub enum DocumentError {
     DuplicateId(ObjectId),
     #[error(transparent)]
     Invalid(#[from] ValidationError),
+    #[error("object {0} is parametric; convert it to an editable mesh first")]
+    NotEditable(ObjectId),
+    #[error("object {0} is already an editable mesh")]
+    AlreadyEditable(ObjectId),
+    #[error(transparent)]
+    Mesh(#[from] MeshError),
 }
 
 /// A parametric CAD document: an ordered list of features plus metadata.
@@ -108,6 +123,11 @@ impl Document {
     }
 
     // ---- crate-private mutation primitives used by commands ----
+
+    /// Marks a document loaded from an older supported schema as current.
+    pub(crate) fn upgrade_schema(&mut self) {
+        self.schema_version = CURRENT_SCHEMA_VERSION;
+    }
 
     pub(crate) fn index_of(&self, id: ObjectId) -> Result<usize, DocumentError> {
         self.features

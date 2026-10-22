@@ -110,6 +110,59 @@ Edit the **Name** field and apply. Leading and trailing spaces are removed.
 
 Select it, then press **Delete** or click **Delete** in the inspector.
 
+### Edit geometry directly (editable meshes)
+
+Parametric objects are edited through their dimensions. To move individual
+vertices, translate edges, or extrude faces, first convert the object to an
+**editable mesh**.
+
+1. Select a box, sphere, or cylinder.
+2. Click **Convert to editable mesh** in the inspector (under "Direct editing").
+   - The object keeps its ID, name, position, and rotation.
+   - Its dimensions are no longer editable. The inspector shows them as read-only
+     history ("converted from Box (width 100, ...)").
+   - **Conversion is one-way.** A box becomes 8 vertices, 12 edges, and 6 faces.
+     Cylinders and spheres are converted with 24 segments (and 12 rings for a
+     sphere).
+3. Choose what to select with the mode buttons in the inspector, or with the keys
+   **1** (Object), **2** (Vertex), **3** (Edge), and **4** (Face).
+4. Left-click an element in the viewport. The selected element is highlighted in
+   yellow. **< Prev** and **Next >** step through all elements of the current
+   mode, which helps with elements that are hard to click.
+
+While an editable mesh is selected, its edges are drawn as a cyan wireframe on
+top of everything (x-ray). In vertex mode every vertex gets a small marker.
+Clicks pick the nearest element on screen, including hidden ones behind the
+surface.
+
+| Mode | Panel | What Apply does |
+| --- | --- | --- |
+| Vertex | X / Y / Z of the vertex in the object's local coordinates (mm) | **Move vertex** to that position |
+| Edge | Offset X / Y / Z (mm), starting at 0 | **Translate edge**: both endpoints move by the offset, so length and direction are kept |
+| Face | Distance (mm), default 10 | **Extrude face** along its normal. Positive goes outwards, negative inwards. The face is replaced by side faces and a new cap, and the cap becomes the selection. |
+
+Press **Enter** in a field or click the action button. As with properties, an
+invalid result leaves the object unchanged and shows the reason in the status
+bar, for example:
+
+```
+Could not update 'Box 1': edge e9 would have zero length
+Could not update 'Box 1': face f21 is not planar; only planar faces can be extruded
+Could not update 'Box 1': extrusion distance must be a finite, non-zero number of at most 1000000 mm
+```
+
+Rules for editable meshes:
+
+- The surface must stay closed: every edge is shared by exactly two faces.
+- Edges cannot have zero length, and faces cannot collapse to zero area.
+- Only planar, convex faces can be extruded. The inspector warns you
+  ("Cannot extrude: ...") before you try.
+- Moving vertices may make faces non-planar. That is allowed, but those faces
+  can no longer be extruded.
+
+**Esc** steps back one level at a time: first the element, then the mode, then
+the object.
+
 ### Save, open, and start a new project
 
 1. Type a path in the toolbar's **File** field. The default is `project.cad.json`. Relative
@@ -133,14 +186,15 @@ To try a ready-made project, open `examples/demo.cad.json`.
 
 | Input | Action |
 | --- | --- |
-| Left click | Select an object; click empty space to deselect |
+| Left click | Select an object, or an element in vertex/edge/face mode; click empty space to deselect |
 | Right drag | Orbit around the focus point |
 | Middle drag, or Shift + right drag | Pan (the scene follows the cursor) |
 | Mouse wheel | Zoom (over the object list: scroll the list) |
 | Home, or **Reset view** | Reset the camera |
 | Delete | Delete the selected object |
-| Esc | Deselect; inside a text field, leave the field |
-| Enter (in an inspector field) | Apply the properties |
+| Esc | Clear element, then mode, then selection; inside a text field, leave the field |
+| Enter (in an inspector field) | Apply the properties, or the vertex/edge/face action |
+| 1 / 2 / 3 / 4 | Object / vertex / edge / face mode (editable meshes) |
 | Tab | Next inspector field |
 | Ctrl+S / Ctrl+O | Save / open using the path in the toolbar |
 
@@ -157,3 +211,5 @@ field.
 | `malformed project file: …` | The file is not valid JSON or does not match the [file format](file-format.md). |
 | The viewport does not react to the mouse | The cursor is over a panel. Camera input only starts over the viewport. |
 | Keys like Delete do nothing | A text field has focus. Press Esc first. |
+| "Convert ... to an editable mesh to edit its topology" | Vertex/edge/face modes only work on converted objects. |
+| A vertex behind the object gets picked | Picking is x-ray. Orbit the camera, or use Prev / Next. |
